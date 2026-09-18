@@ -9,13 +9,13 @@ namespace defs {
 
 // `(x, y)` position in the simulation domain.
 struct XY {
-  __dhce__ XY(int x, int y) : x(x), y(y) {}
+  __device__ __host__ constexpr XY(int x, int y) : x(x), y(y) {}
   int x, y;
 };
 
 // `(x, y, t)` position in the simulation domain.
 struct XYT {
-  __dhce__ XYT(int x, int y, int t) : x(x), y(y), t(t) {}
+  __device__ __host__ constexpr XYT(int x, int y, int t) : x(x), y(y), t(t) {}
   int x, y, t;
 };
 
@@ -27,34 +27,34 @@ struct XYT {
 //     in a block/grid.
 //
 struct UV {
-  __dhce__ UV(int u, int v) : u(u), v(v) {}
+  __device__ __host__ constexpr UV(int u, int v) : u(u), v(v) {}
   int u, v;
 };
 
 // Arithmetic ops on `UV`, `XY`, and `XYT` objects.
-__dhce__ UV operator+(UV a, UV b) { return UV(a.u + b.u, a.v + b.v); }
-__dhce__ UV operator+(int a, UV b) { return UV(a + b.u, a + b.v); }
-__dhce__ UV operator+(UV a, int b) { return UV(a.u + b, a.v + b); }
-__dhce__ XY operator+(XY a, XY b) { return XY(a.x + b.x, a.y + b.y); }
-__dhce__ XY operator+(XY a, int b) { return XY(a.x + b, a.y + b); }
-__dhce__ XYT operator+(XYT a, XYT b) {
+__device__ __host__ constexpr UV operator+(UV a, UV b) { return UV(a.u + b.u, a.v + b.v); }
+__device__ __host__ constexpr UV operator+(int a, UV b) { return UV(a + b.u, a + b.v); }
+__device__ __host__ constexpr UV operator+(UV a, int b) { return UV(a.u + b, a.v + b); }
+__device__ __host__ constexpr XY operator+(XY a, XY b) { return XY(a.x + b.x, a.y + b.y); }
+__device__ __host__ constexpr XY operator+(XY a, int b) { return XY(a.x + b, a.y + b); }
+__device__ __host__ constexpr XYT operator+(XYT a, XYT b) {
   return XYT(a.x + b.x, a.y + b.y, a.t + b.t);
 }
-__dhce__ UV operator-(UV a, UV b) { return UV(a.u - b.u, a.v - b.v); }
-__dhce__ UV operator-(UV a, int b) { return UV(a.u - b, a.v - b); }
-__dhce__ UV operator-(int a, UV b) { return UV(a - b.u, a - b.v); }
-__dhce__ UV operator*(int a, UV b) { return UV(a * b.u, a * b.v); }
-__dhce__ UV operator*(UV a, int b) { return UV(a.u * b, a.v * b); }
-__dhce__ UV operator*(UV a, UV b) { return UV(a.u * b.u, a.v * b.v); }
-__dhce__ XY operator*(int a, XY b) { return XY(a * b.x, a * b.y); }
-__dhce__ XYT operator*(int a, XYT b) { return XYT(a * b.x, a * b.y, a * b.t); }
-__dhce__ UV operator%(UV a, UV b) { return UV(a.u % b.u, a.v % b.v); }
-__dhce__ bool operator>(UV a, UV b) { return a.u > b.u && a.v > b.v; }
-__dhce__ bool operator>=(UV a, UV b) { return a.u >= b.u && a.v >= b.v; }
-__dhce__ int Sum(UV a) { return a.u + a.v; }
-__dhce__ int Prod(UV a) { return a.u * a.v; }
-__dhce__ int Prod(XY a) { return a.x * a.y; }
-__dhce__ UV VU(UV a) { return UV(a.v, a.u); }
+__device__ __host__ constexpr UV operator-(UV a, UV b) { return UV(a.u - b.u, a.v - b.v); }
+__device__ __host__ constexpr UV operator-(UV a, int b) { return UV(a.u - b, a.v - b); }
+__device__ __host__ constexpr UV operator-(int a, UV b) { return UV(a - b.u, a - b.v); }
+__device__ __host__ constexpr UV operator*(int a, UV b) { return UV(a * b.u, a * b.v); }
+__device__ __host__ constexpr UV operator*(UV a, int b) { return UV(a.u * b, a.v * b); }
+__device__ __host__ constexpr UV operator*(UV a, UV b) { return UV(a.u * b.u, a.v * b.v); }
+__device__ __host__ constexpr XY operator*(int a, XY b) { return XY(a * b.x, a * b.y); }
+__device__ __host__ constexpr XYT operator*(int a, XYT b) { return XYT(a * b.x, a * b.y, a * b.t); }
+__device__ __host__ constexpr UV operator%(UV a, UV b) { return UV(a.u % b.u, a.v % b.v); }
+__device__ __host__ constexpr bool operator>(UV a, UV b) { return a.u > b.u && a.v > b.v; }
+__device__ __host__ constexpr bool operator>=(UV a, UV b) { return a.u >= b.u && a.v >= b.v; }
+__device__ __host__ constexpr int Sum(UV a) { return a.u + a.v; }
+__device__ __host__ constexpr int Prod(UV a) { return a.u * a.v; }
+__device__ __host__ constexpr int Prod(XY a) { return a.x * a.y; }
+__device__ __host__ constexpr UV VU(UV a) { return UV(a.v, a.u); }
 
 // Parameterizes the simulation kernel.
 struct RunShape {

@@ -9,8 +9,13 @@
 // when dealing with such objects (e.g. registers wasted, uses slow, local
 // memory accesses, ...).
 //
+#ifdef _MSC_VER
+#define __dhce__ __device__ __host__
+#define __dhsc__ __device__ __host__ static
+#else
 #define __dhce__ __device__ __host__ constexpr
 #define __dhsc__ __device__ __host__ static constexpr
+#endif
 #define __dh__ __device__ __host__
 
 #endif // _MACROS_H_

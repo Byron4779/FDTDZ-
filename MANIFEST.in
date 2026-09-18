@@ -1,5 +1,14 @@
-include README.md LICENSE *.toml src/fdtdz_jax/ptx/*.ptx 
-graft lib
+include README.md LICENSE *.toml CMakeLists.txt
+include *.ipynb
+recursive-include src *.py *.ptx
+recursive-include cuda *.h *.cc *.cu CMakeLists.txt
+recursive-include examples *.py
+include docs/material_fitting.md
+include docs/oblique_incidence_3d.md docs/jax_gpu_profiling.md
+include docs/gpu_validation.md
+recursive-include tests *.py
+recursive-include tools *.py
+global-exclude *.py[cod] *.so *.pyd
 exclude .*
 prune .github
 

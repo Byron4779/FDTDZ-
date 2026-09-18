@@ -1,6 +1,10 @@
-# `mkdir build && cd build && cmake .. && make -j && ctest --verbose`.
+# Build PTX assets: cmake -S cuda -B build/ptx && cmake --build build/ptx.
 
 cmake_minimum_required(VERSION 3.18)
+
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES AND "$ENV{CUDAARCHS}" STREQUAL "")
+  set(CMAKE_CUDA_ARCHITECTURES 75 CACHE STRING "CUDA architectures for PTX")
+endif()
 
 project(fdtdz LANGUAGES CXX CUDA)
 
@@ -9,17 +13,6 @@ find_package(CUDAToolkit REQUIRED)
 
 enable_language(CUDA)
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CUDA_ARCHITECTURES 75)  # Target RTX4000 and T4.
-
-# Download googletest and google benchmark from github.
-include(FetchContent)
-FetchContent_Declare(
-    googletest
-   	GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG b796f7d # release 1.13.0.
-)
-FetchContent_MakeAvailable(googletest)
-enable_testing()
 
 add_custom_target(all_ptx_kernels)
 
@@ -48,7 +41,6 @@ macro(kernelgen_single)
 
   # Dependencies for dependent kernels.
   add_dependencies(all_ptx_kernels ${ARGV0}_copy)
-  set_target_properties(${ARGV0}_copy PROPERTIES FIXTURES_SETUP all_ptx_kernels_fixture)
 endmacro()
 
 # Generate ptx kernels for 0-10 threads dedicated to pml.
@@ -80,9 +72,6 @@ macro(kerngen_bmark)
     ${ARGV0} half2 float ${ARGV1} true false true)
   kernelgen_single(kernel_16_${ARGV0}_${ARGV1}_110 
     ${ARGV0} half2 float ${ARGV1} true true false)
-  # Not needed because this is already generated.
-  # kernelgen_single(kernel_16_${ARGV0}_${ARGV1}_111 
-  #   ${ARGV0} half2 float ${ARGV1} true true true)
 endmacro()
   
 # Generate ptx code for the following "GPUs: compute_capability".
@@ -106,35 +95,4 @@ kern16gen_npml(80)
 kerngen_bmark(75 7)
 
 
-include(GoogleTest)
-
-macro(cuda_unit_test) # Unit tests.
-  add_executable(${ARGV0}_test ${ARGV0}_test.cu)
-  target_link_libraries(${ARGV0}_test gtest_main CUDA::cudart CUDA::cuda_driver)
-  gtest_discover_tests(${ARGV0}_test)
-  add_dependencies(${ARGV0}_test all_ptx_kernels)
-endmacro()
-
-# Unit tests.
-cuda_unit_test(defs)
-cuda_unit_test(diamond)
-cuda_unit_test(scanner)
-cuda_unit_test(buffer)
-cuda_unit_test(cbuf)
-cuda_unit_test(field)
-cuda_unit_test(zcoeff)
-cuda_unit_test(slice)
-cuda_unit_test(update)
-cuda_unit_test(reference)
-cuda_unit_test(kernel_precompiled)
-cuda_unit_test(verification)
-cuda_unit_test(kernel)
-cuda_unit_test(kernel_jax)
-
-
-# Sanitizer test, which can help with memory issues.
-add_test(NAME sanitizer_test 
-  COMMAND ${CUDAToolkit_BIN_DIR}/compute-sanitizer
-                 $<TARGET_FILE:verification_test>)
-set_tests_properties(sanitizer_test PROPERTIES FIXTURES_REQUIRED all_ptx_kernels_fixture)
 

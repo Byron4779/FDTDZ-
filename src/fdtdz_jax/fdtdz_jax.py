@@ -8,16 +8,36 @@ import sys
 import numpy as np
 import jax
 from jax import core, dtypes, lax
+# Primitive moved to jax.extend.core in newer JAX releases.
+try:
+  Primitive = core.Primitive
+except AttributeError:
+  from jax.extend.core import Primitive
 from jax import numpy as jnp
 from jax.core import ShapedArray
 from jax.interpreters import ad, batching, mlir, xla
-from jax.lib import xla_client
-from jaxlib.hlo_helpers import custom_call
+try:
+  from jax import ffi
+except ImportError:  # JAX 0.4 exposes the same API under jax.extend.
+  from jax.extend import ffi
 
-# If the GPU version exists, also register those
-from . import gpu_ops
-for _name, _value in gpu_ops.registrations().items():
-  xla_client.register_custom_call_target(_name, _value, platform="gpu")
+# If the GPU version exists, also register those. Import the compiled
+# extension defensively via importlib so that package-level import hooks
+# (including lazy attribute access) do not produce spurious circular-import
+# errors during module initialization.
+try:
+  import importlib
+  gpu_ops = importlib.import_module(".gpu_ops", __package__)
+  _gpu_ops_import_error = None
+except (ImportError, OSError) as exc:
+  gpu_ops = None
+  _gpu_ops_import_error = exc
+
+if gpu_ops is not None:
+  for _name, _value in getattr(gpu_ops, "registrations", lambda: {})().items():
+    # Registration API 0 explicitly preserves the stream/buffers/opaque CUDA
+    # ABI. The FFI default (typed handlers, API 1) has a different signature.
+    ffi.register_ffi_target(_name, _value, platform="CUDA", api_version=0)
 
 # Number of cells to use for padding the systolic update scheme.
 _NUM_PAD_CELLS = 4
@@ -25,17 +45,44 @@ _NUM_PAD_CELLS = 4
 
 def _preset_launch_params(device_kind):
   """Returns ``(block, grid, spacing, cc)`` parameters for ``device_kind``."""
-  if device_kind == "Quadro RTX 4000":
+  normalized = str(device_kind or "").lower()
+  if "quadro rtx 4000" in normalized:
+    preset = ((2, 4), (6, 6), 2, (7, 5))
+  elif "tesla t4" in normalized:
+    preset = ((2, 4), (8, 5), 2, (7, 5))
+  elif "v100" in normalized:
+    preset = ((2, 4), (10, 8), 2, (7, 0))
+  elif "a100" in normalized or "h100" in normalized or "h200" in normalized:
+    preset = ((2, 4), (12, 9), 4, (8, 0))
+  elif normalized in {"cpu", "cpu device", "cpu"} or normalized.startswith("cpu"):
     return ((2, 4), (6, 6), 2, (7, 5))
-  elif device_kind == "Tesla T4":
-    return ((2, 4), (8, 5), 2, (7, 5))
-  elif "V100" in device_kind:
-    return ((2, 4), (10, 8), 2, (7, 0))
-  elif "A100" in device_kind:
-    return ((2, 4), (12, 9), 4, (8, 0))
   else:
-    raise ValueError(
-        f"No preset launch parameters available for \"{device_kind}\".")
+    preset = ((2, 4), (6, 6), 2, (7, 5))
+
+  if gpu_ops is None or not hasattr(gpu_ops, "device_info"):
+    return preset
+  device = next((d for d in jax.local_devices() if d.platform == "gpu"
+                 and str(d.device_kind).lower() == normalized), None)
+  if device is None:
+    return preset
+  info = gpu_ops.device_info(getattr(device, "local_hardware_id", device.id))
+  return _constrain_launch_params(preset, info["multiprocessor_count"],
+                                  tuple(info["compute_capability"]))
+
+
+def _constrain_launch_params(preset, multiprocessor_count, capability):
+  """Respect cooperative-launch capacity and available packaged PTX targets."""
+  block, grid, spacing, _ = preset
+  targets = ((3, 7), (6, 0), (7, 0), (7, 5), (8, 0))
+  compatible = [cc for cc in targets if cc <= capability]
+  if not compatible or multiprocessor_count < 1:
+    raise ValueError("No compatible fdtdz CUDA launch configuration")
+  if grid[0] * grid[1] > multiprocessor_count:
+    gu = math.isqrt(multiprocessor_count)
+    while multiprocessor_count % gu:
+      gu -= 1
+    grid = (gu, multiprocessor_count // gu)
+  return block, grid, spacing, compatible[-1]
 
 
 def _padded_domain_shape(shape, launch_params):
@@ -261,7 +308,15 @@ def fdtdz(
 
   """
   if launch_params is None:
-    launch_params = _preset_launch_params(jax.devices()[0].device_kind)
+    device = next((d for d in jax.devices() if getattr(d, "platform", "") == "gpu"),
+                  jax.devices()[0])
+    launch_params = _preset_launch_params(getattr(device, "device_kind", "cpu"))
+
+    if getattr(device, "platform", "") != "gpu":
+      raise RuntimeError(
+          "fdtdz_jax.fdtdz requires a GPU-backed JAX device. "
+          f"Current device is {device} ({getattr(device, 'platform', 'unknown')})."
+      )
 
   total_pml_width = pml_widths[0] + pml_widths[1]
 
@@ -403,6 +458,13 @@ def fdtdz(
         f"Unrecognized compute capability {compute_capability}. "
         "Must be one of (3, 7), (6, 0), (7, 0), (7, 5), or (8, 0).")
 
+  if not any(device.platform == "gpu" for device in jax.devices()):
+    raise RuntimeError(
+        "fdtdz_jax requires a GPU-backed JAX runtime. "
+        "No GPU devices were detected by JAX. "
+        "Install a CUDA-enabled jaxlib and ensure `jax.devices()` returns a GPU device."
+    )
+
   # Once again, for performance reasons, we require that there be 4 cells of
   # padding in the x- and y-directions, and that the actual simulated areas
   # domain shape abide by rules related to ``launch_params``.
@@ -532,7 +594,9 @@ def _internal_shapes(**kwargs):
       "buffer": (6, xx, yy, 64),  # Larger than needed.
       "cbuffer": (3, xx, yy, 64),  # Larger than needed.
       "mask": (xx, yy // 2, 32),
-      "src": (xx, yy // 2, 32) if kwargs["srctype"] == 1 else (2, xx, zz),
+      # YSrc::GlobalElems = 2 * Nz * kWarpSize * xx. Internal storage
+      # includes auxiliary PML slots, even when physical domainz is smaller.
+      "src": (xx, yy // 2, 32) if kwargs["srctype"] == 1 else (2, xx, 64),
       "output": (kwargs["outnum"],
                  3,
                  kwargs["subvolume_size"][0] + 2 * _NUM_PAD_CELLS,
@@ -560,6 +624,13 @@ def _default_layouts(*shapes):
 
 def _fdtdz_lowering(ctx, cbuffer, abslayer, srclayer, waveform, zcoeff,
                     **kwargs):
+  if gpu_ops is None:
+    raise RuntimeError(
+        "Unable to load the fdtdz CUDA extension. Check that gpu_ops was "
+        "built for this Python version and that the CUDA runtime libraries "
+        "are available."
+    ) from _gpu_ops_import_error
+
   opaque = gpu_ops.build_kernel_descriptor(
       kwargs["dt"],
       kwargs["capability"],
@@ -595,8 +666,9 @@ def _fdtdz_lowering(ctx, cbuffer, abslayer, srclayer, waveform, zcoeff,
   (_, xx, yy, zz) = mlir.ir.RankedTensorType(cbuffer.type).shape
   shapes = _internal_shapes(**kwargs)
 
-  out = custom_call(
-      "kernel_f16" if kwargs["use_reduced_precision"] else "kernel_f32",
+  target = "kernel_f16" if kwargs["use_reduced_precision"] else "kernel_f32"
+  operands = [cbuffer, abslayer, srclayer, waveform, zcoeff]
+  call_args = dict(
       result_types=[
           mlir.ir.RankedTensorType.get(shapes["buffer"],
                                        mlir.ir.F32Type.get()),
@@ -607,7 +679,6 @@ def _fdtdz_lowering(ctx, cbuffer, abslayer, srclayer, waveform, zcoeff,
           mlir.ir.RankedTensorType.get(shapes["output"],
                                        mlir.ir.F32Type.get()),
       ],
-      operands=[cbuffer, abslayer, srclayer, waveform, zcoeff],
       operand_layouts=[
           (3, 2, 1, 0),  # cbuffer.
           (1, 2, 0),  # abslayer.
@@ -618,13 +689,18 @@ def _fdtdz_lowering(ctx, cbuffer, abslayer, srclayer, waveform, zcoeff,
       result_layouts=_default_layouts(shapes["buffer"], shapes["cbuffer"],
                                       shapes["mask"], shapes["src"],
                                       shapes["output"]),
-      backend_config=opaque).results
-
-  return out
+      api_version=2,  # Preserve the previous hlo_helpers.custom_call default.
+      backend_config=opaque)
+  if tuple(map(int, jax.__version__.split(".")[:2])) >= (0, 6):
+    # Modern FFI lowering can transport the existing binary descriptor with
+    # an explicit legacy API version. JAX 0.4's builder accepts dictionaries
+    # only, so keep its compatible MLIR lowering below.
+    return ffi.ffi_lowering(target, **call_args)(ctx, *operands)
+  return mlir.custom_call(target, operands=operands, **call_args).results
 
 
 # Register op with JAX.
-_fdtdz_prim = core.Primitive("fdtdz")
+_fdtdz_prim = Primitive("fdtdz")
 _fdtdz_prim.multiple_results = True
 _fdtdz_prim.def_impl(functools.partial(xla.apply_primitive, _fdtdz_prim))
 _fdtdz_prim.def_abstract_eval(_fdtdz_abstract)

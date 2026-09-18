@@ -1,4 +1,6 @@
 #include <pybind11/pybind11.h>
+#include <cuda.h>
+#include <stdexcept>
 #include <string>
 
 #include "kernel_jax.h"
@@ -25,6 +27,26 @@ pybind11::dict Registrations() {
 
 PYBIND11_MODULE(gpu_ops, m) {
   m.def("registrations", &Registrations);
+  m.def("device_info", [](int ordinal) {
+    auto check = [](CUresult result) {
+      if (result != CUDA_SUCCESS) {
+        const char *message = nullptr;
+        cuGetErrorString(result, &message);
+        throw std::runtime_error(message ? message : "CUDA device query failed");
+      }
+    };
+    check(cuInit(0));
+    CUdevice device;
+    check(cuDeviceGet(&device, ordinal));
+    int sms, major, minor;
+    check(cuDeviceGetAttribute(&sms, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
+    check(cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+    check(cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
+    pybind11::dict info;
+    info["multiprocessor_count"] = sms;
+    info["compute_capability"] = pybind11::make_tuple(major, minor);
+    return info;
+  });
   m.def(
       "build_kernel_descriptor",
       [](float dt, int capability, bool withglobal, bool withshared,

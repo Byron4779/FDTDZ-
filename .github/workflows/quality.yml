@@ -1,0 +1,52 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+        jax-version: ["0.4.32", "0.5.3", "0.6.2"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: >-
+          python -m pip install
+          "jax==${{ matrix.jax-version }}"
+          "jaxlib==${{ matrix.jax-version }}" pytest matplotlib "h5py>=3.8,<4"
+      - run: python -m pytest -q
+        env:
+          PYTHONPATH: src
+          JAX_PLATFORMS: cpu
+          MPLBACKEND: Agg
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    env:
+      FDTDZ_BUILD_CUDA: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip build
+      # The default build first creates an sdist, then builds the wheel from
+      # that archive, detecting files accidentally omitted from MANIFEST.in.
+      - run: python -m build
+      - run: python tools/check_distributions.py dist --pure-python
+      - run: python -m pip install dist/*.whl
+      # -I excludes the repository/PYTHONPATH: imports must use the wheel.
+      - run: python -I tools/smoke_installed.py

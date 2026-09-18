@@ -1,6 +1,10 @@
 [build-system]
-requires = ["setuptools>=42", "wheel", "setuptools_scm[toml]>=3.4", "pybind11>=2.6", "cmake"]
+requires = ["setuptools>=64", "wheel", "setuptools_scm>=8,<10", "pybind11>=2.10,<3", "cmake>=3.18,<4"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
 write_to = "src/fdtdz_jax/fdtdz_jax_version.py"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

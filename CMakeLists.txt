@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.18)
 
+# Set the default before CUDA compiler detection, honoring CMake overrides and
+# CUDAARCHS.  A baseline target also works with toolkits predating Ada support.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES AND "$ENV{CUDAARCHS}" STREQUAL "")
+  set(CMAKE_CUDA_ARCHITECTURES 75 CACHE STRING "CUDA architectures for gpu_ops")
+endif()
+
 project(fdtdz_jax LANGUAGES CXX CUDA)
 
 # To run cmake independently of "pip3 install", install pybind11 via
@@ -13,7 +19,11 @@ find_package(CUDAToolkit REQUIRED)
 
 enable_language(CUDA)
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CUDA_ARCHITECTURES 75)  # Needed for reduced precision.
+
+if(MSVC)
+  string(APPEND CMAKE_CXX_FLAGS " /Zc:preprocessor")
+  string(APPEND CMAKE_CUDA_FLAGS " -Xcompiler=\"/Zc:preprocessor\"")
+endif()
 
 include_directories(${CMAKE_CURRENT_LIST_DIR}/cuda)
 include_directories(${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})

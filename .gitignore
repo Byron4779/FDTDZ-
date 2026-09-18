@@ -1,12 +1,36 @@
 [bB]uild
 [bB]uild/**
+cmake-build-*/
 
 # artifacts of build
 .eggs/
 .eggs/**
 src/fdtdz.egg-info/**
 src/fdtdz_jax/fdtdz_jax_version.py
+*.egg-info/
 
 # artifacts of install
 dist/
 dist/**
+
+# Python caches and test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+
+# Locally built CUDA extensions.  Release artifacts belong in wheels, not the
+# source tree.
+src/fdtdz_jax/*.pyd
+src/fdtdz_jax/*.so
+
+# Local environments and editor state
+.venv/
+.venv-*/
+.vscode/
+
+# Generated simulation results and scratch data
+outputs/
+tmp/

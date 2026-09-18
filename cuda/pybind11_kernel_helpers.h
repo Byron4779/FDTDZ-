@@ -14,10 +14,6 @@
 
 namespace pybind11_kernel_helpers {
 
-// template <typename T> pybind11::bytes PackDescriptor(const T &descriptor) {
-//   return pybind11::bytes(kernel_helpers::PackDescriptorAsString(descriptor));
-// }
-
 template <typename T> pybind11::capsule EncapsulateFunction(T *fn) {
   return pybind11::capsule(kernel_helpers::bit_cast<void *>(fn),
                            "xla._CUSTOM_CALL_TARGET");

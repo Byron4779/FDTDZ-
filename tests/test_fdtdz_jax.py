@@ -7,13 +7,82 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".99"
 
 import fdtdz_jax
 from jax.test_util import check_grads
-from jax.config import config
+from jax import config
 import jax.numpy as jnp
 import jax
 import pytest
 import numpy as np
+from types import SimpleNamespace
 
 # autopep8: on
+
+requires_gpu = pytest.mark.skipif(
+    not any(device.platform == "gpu" for device in jax.devices()),
+    reason="the original fdtdz custom call requires a GPU")
+
+
+def test_top_level_api_exports():
+  assert callable(fdtdz_jax.fdtdz)
+  assert callable(fdtdz_jax.residual)
+  assert callable(fdtdz_jax.residual)  # Must not become the lazily loaded module.
+  assert isinstance(fdtdz_jax.__version__, str)
+  assert fdtdz_jax.__version__
+
+
+def test_cpu_launch_params_use_generic_fallback():
+  assert fdtdz_jax.fdtdz_jax._preset_launch_params("cpu") == ((2, 4), (6, 6), 2, (7, 5))
+
+
+@pytest.mark.parametrize("kind,sms,capability", [
+    ("NVIDIA GeForce RTX 4060 Laptop GPU", 24, (8, 9)),
+    ("Tesla P100", 56, (6, 0)),
+    ("NVIDIA A100 MIG", 14, (8, 0)),
+])
+def test_automatic_launch_respects_physical_device(monkeypatch, kind, sms, capability):
+  module = fdtdz_jax.fdtdz_jax
+  device = SimpleNamespace(platform="gpu", device_kind=kind, id=2, local_hardware_id=0)
+  queried = []
+
+  def info(ordinal):
+    queried.append(ordinal)
+    return {"multiprocessor_count": sms, "compute_capability": capability}
+
+  monkeypatch.setattr(module, "gpu_ops", SimpleNamespace(device_info=info))
+  monkeypatch.setattr(jax, "local_devices", lambda: [device])
+  block, grid, spacing, cc = module._preset_launch_params(kind)
+  assert queried == [0]
+  assert 0 < grid[0] * grid[1] <= sms
+  assert cc <= capability
+  kernel = f"kernel_32_{cc[0]}{cc[1]}_4_111.ptx"
+  assert os.path.isfile(os.path.join(os.path.dirname(module.__file__), "ptx", kernel))
+
+
+@requires_gpu
+@pytest.mark.parametrize("reduced", [False, True])
+@pytest.mark.parametrize("axis", ["x", "y", "z"])
+def test_custom_call_precision_and_jit(reduced, axis):
+  """Execute both registered targets; compare eager/JIT and cropped output."""
+  zz = (128 if reduced else 64) - 16
+  epsilon = np.ones((3, 24, 24, zz), np.float32)
+
+  def simulate(subvolume_size=None):
+    return _simulate(
+        epsilon, 0.5, 128, axis, 10.0, 2, 4, 1e-3, (8, 8),
+        (123, 128, 4), reduced, subvolume_size=subvolume_size,
+        subvolume_offset=(2, 3, 4) if subvolume_size else (0, 0, 0),
+        compute_residual=False)[0]
+
+  eager = simulate()
+  compiled = jax.jit(simulate)()
+  compiled.block_until_ready()
+  assert all(d.platform == "gpu" for d in compiled.devices())
+  assert np.isfinite(np.asarray(compiled)).all()
+  amplitude = float(np.max(np.abs(np.asarray(compiled))))
+  assert amplitude > 1e-6
+  np.testing.assert_allclose(compiled, eager, rtol=1e-5, atol=1e-6)
+  cropped = simulate((8, 9, 10))
+  np.testing.assert_allclose(cropped, eager[..., 2:10, 3:12, 4:14],
+                             rtol=1e-5, atol=1e-6)
 
 
 def _ramped_sin(wavelength, ramp, dt, tt, delay=4):
@@ -62,7 +131,8 @@ def _pml_sigma_values(pml_widths, zz, ln_R=16.0, m=4.0):
 
 def _simulate(epsilon, dt, tt, src_type, src_wavelength, src_ramp, abs_width,
               abs_smoothness, pml_widths, output_steps, use_reduced_precision,
-              subvolume_offset=(0, 0, 0), subvolume_size=None):
+              subvolume_offset=(0, 0, 0), subvolume_size=None,
+              compute_residual=True):
   """Run a simple continuous-wave dipole-source simulation."""
   xx, yy = epsilon.shape[1:3]
   zz = (128 if use_reduced_precision else 64) - sum(pml_widths)
@@ -121,7 +191,7 @@ def _simulate(epsilon, dt, tt, src_type, src_wavelength, src_ramp, abs_width,
       offset=subvolume_offset,
   )
 
-  if subvolume_size is None:
+  if subvolume_size is None and compute_residual:
     # Measuring error is only relevant for the full output domain.
     err = fdtdz_jax.residual(
         2 * np.pi / src_wavelength,
@@ -151,6 +221,7 @@ def _simulate(epsilon, dt, tt, src_type, src_wavelength, src_ramp, abs_width,
      (200, 200, 40000, 0.25, 10.0, True, 2e-2),
      (200, 200, 10000, 0.55, 7.8, True, 2e-2),
      ])
+@requires_gpu
 def test_point_source(xx, yy, tt, dt, src_type, src_wavelength,
                       use_reduced_precision, max_err):
   quarter_period = int(round(src_wavelength / 4 / dt))
@@ -193,6 +264,7 @@ def test_point_source(xx, yy, tt, dt, src_type, src_wavelength,
      (1300, 1300, 10, 1),
      (1300, 1300, 10, 6),
      ])
+@requires_gpu
 def test_large_sim(
         xx0, yy0, zz0, num_output, dt=0.5, tt=1000, pml_widths=(8, 8),
         use_reduced_precision=True, abs_width=50, abs_smoothness=1e-2,

@@ -1,0 +1,90 @@
+name: NVIDIA GPU validation
+
+# Manually run on a trusted Linux runner with NVIDIA drivers and nvcc installed.
+# CUDA toolkit must support the requested architectures.  CUDA 12 is expected
+# for the pinned JAX CUDA plugin below.
+on:
+  workflow_dispatch:
+    inputs:
+      architectures:
+        description: "CMake CUDA architecture list (supported by runner toolkit)"
+        required: true
+        default: "75;80;86;89"
+        type: string
+      device_family:
+        description: "Physical GPU family to validate (requires matching runner label)"
+        required: true
+        default: ada
+        type: choice
+        options: [pascal, volta, turing, ampere, ada, hopper]
+      large_tests:
+        description: "Include large CUDA memory stress cases (use a GPU with at least 12 GiB)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  gpu:
+    runs-on: [self-hosted, linux, x64, nvidia-gpu, "nvidia-${{ inputs.device_family }}"]
+    strategy:
+      fail-fast: false
+      matrix:
+        jax-version: ["0.4.32", "0.5.3", "0.6.2"]
+    timeout-minutes: 45
+    env:
+      FDTDZ_BUILD_CUDA: "1"
+      FDTDZ_CUDA_ARCHITECTURES: ${{ inputs.architectures }}
+      JAX_PLATFORMS: cuda
+      XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: nvidia-smi && nvcc --version
+      - run: python -m venv .venv-gpu-ci
+      - run: .venv-gpu-ci/bin/python -m pip install "jax[cuda12]==${{ matrix.jax-version }}" build pytest matplotlib
+      - run: .venv-gpu-ci/bin/python -m build
+      - run: .venv-gpu-ci/bin/python tools/check_distributions.py dist
+      - run: .venv-gpu-ci/bin/python -m pip install --no-deps dist/*.whl
+      - name: Require physical GPU family and compiled custom calls
+        run: >-
+          .venv-gpu-ci/bin/python -I tools/validate_gpu_environment.py
+          --expected-family ${{ inputs.device_family }} --output outputs/gpu-environment.json
+      - run: .venv-gpu-ci/bin/python -I tools/smoke_installed.py
+      - name: Test installed CUDA extension
+        run: |
+          selection=()
+          if [ "${{ inputs.large_tests }}" != "true" ]; then
+            selection=(-k "not test_large_sim")
+          fi
+          .venv-gpu-ci/bin/python -m pytest -q -s --tb=short -o pythonpath= --import-mode=importlib \
+            --junitxml=outputs/custom-calls.xml tests/test_fdtdz_jax.py "${selection[@]}"
+      - name: Reject skipped CUDA execution tests
+        run: >-
+          .venv-gpu-ci/bin/python -I tools/validate_gpu_environment.py
+          --expected-family ${{ inputs.device_family }} --junit outputs/custom-calls.xml
+          --output outputs/gpu-environment.json
+      - run: .venv-gpu-ci/bin/python examples/validate_jax_gpu_2d.py
+      - run: .venv-gpu-ci/bin/python examples/validate_jax_gpu_3d.py
+      - run: >-
+          .venv-gpu-ci/bin/python examples/validate_jax_gpu_3d.py
+          --bloch-wavevector 0.1 -0.07
+      - name: Profile 3D JAX GPU updates and monitor overhead
+        run: >-
+          .venv-gpu-ci/bin/python examples/profile_jax_gpu_3d.py
+          --shape 32 32 96 --steps 160 --repeats 5 --output outputs/profile-gpu
+        env:
+          XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+      - name: Preserve GPU profiling reports and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-${{ inputs.device_family }}-jax-${{ matrix.jax-version }}
+          path: outputs/
+          if-no-files-found: warn

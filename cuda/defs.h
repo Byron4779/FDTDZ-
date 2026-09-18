@@ -4,9 +4,12 @@
 #define _DEFS_H_
 
 #include <cuda_fp16.h>
+#include <cstdint>
 
 #include "macros.h"
 #include "shapedefs.h"
+
+using uint = unsigned int;
 
 namespace defs {
 

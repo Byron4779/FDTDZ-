@@ -1,4 +1,4 @@
-#include <cassert>
+#include <stdexcept>
 #include <string>
 
 #include "kernel.h"
@@ -6,14 +6,8 @@
 #include "kernel_jax.h"
 #include "kernel_precompiled.h"
 #include "scanner.h"
-#include "testutils.h"
 
 namespace kernel_jax {
-
-using defs::RunShape;
-using defs::UV;
-using defs::XY;
-using kernel_precompiled::PreCompiledKernelType;
 
 namespace {
 
@@ -22,9 +16,6 @@ void ThrowIfError(cudaError_t error) {
     throw std::runtime_error(cudaGetErrorString(error));
   }
 }
-
-template <typename T>
-__global__ void EmptyKernel(kernel::KernelArgs<T, float> args){};
 
 template <typename T>
 inline void ApplyKernel(cudaStream_t stream, void **buffers, const char *opaque,
